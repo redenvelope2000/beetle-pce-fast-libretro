@@ -1468,6 +1468,23 @@ static bool MDFNI_LoadCD(const char *path, const char *ext)
       return false;
    }
 
+   { // enable Shanghai II mouse input patch.
+      char *name = strdup (path);
+      for (int i=0; name[i]; i++) name[i] = toupper (name[i]);
+      char *search_for_shanghai_ii  = strstr (name, "SHAN"); 
+      if (search_for_shanghai_ii) {
+        char *step2 = strstr (search_for_shanghai_ii, "HAI");
+        if (step2 && (strstr (step2, "2") || strstr (step2, "II"))) {
+          log_cb (RETRO_LOG_INFO, "Applying PCE CDROM Shanghai II mouse input patch.\n");
+          uint8_t *rom = (uint8_t *)(ROMSpace);
+          rom[0x4cf] = 0xeb; // this is actually inside the system card.
+          rom[0x4cf +1] = 0x02;
+          rom[0x4cf +2] = 0xea;     
+        }
+      }
+      free (name);
+   }
+
    //MDFNI_SetLayerEnableMask(~0ULL);
 
    MDFN_LoadGameCheats(NULL);
@@ -1521,6 +1538,30 @@ static bool MDFNI_LoadGame(const char *path, const char *ext,
 
    MDFN_LoadGameCheats(NULL);
    MDFNMP_InstallReadPatches();
+
+   {
+     #define SHANGHAI_ROM_SIZE 131072
+     #define SHANGHAI_ROM_CSM 0x1e1c01d306e77f8a
+     log_cb (RETRO_LOG_INFO, "Game ROM size = %d\n", size);
+     uint64_t rom_csm = 0;
+     if (size >= 24) rom_csm = ((uint64_t *)data)[0] + ((uint64_t *)data)[1] + ((uint64_t *)data)[2];
+     log_cb (RETRO_LOG_INFO, "Game ROM csm = %llx\n", rom_csm);
+     if (size == SHANGHAI_ROM_SIZE && rom_csm == SHANGHAI_ROM_CSM) { // considering only x64 and arm64.
+       log_cb (RETRO_LOG_INFO, "Applying PCE HuCard Shanghai mouse input patch.\n");
+       uint8_t *rom = (uint8_t *)(ROMSpace);
+       // PCE Shanghai: @e25e ROM offset 0x025e - EB 00 EA
+       //               @9e51 ROM offset 0x3e51 - AD
+       rom[0x25e] = 0xeb;
+       rom[0x25e +1] = 0x00;
+       rom[0x25e +2] = 0xea;     
+       rom[0x3e51] = 0xad;
+       // PCE Shanghai: quick clear - @bb8b ROM offset 0x5b8b - EA EA
+       rom[0x5b8b] = 0xea;
+       rom[0x5b8c] = 0xea;
+       #define SHANGHAI_CPU 3
+       if (pce_overclocked < SHANGHAI_CPU) pce_overclocked = SHANGHAI_CPU; // avoid slowing down.
+     }
+   }
 
    if (GameFile)
       file_close(GameFile);
@@ -2270,6 +2311,37 @@ static void update_input(void)
       } break;
       } // case
    }
+}
+
+extern "C" int check_mouse_state (int *dx, int *dy, int *buttons)
+{
+  int16_t raw_x = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_X);
+  int16_t raw_y = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_Y);
+  int16_t x = (int16_t)roundf((float)raw_x * mouse_sensitivity);
+  int16_t y = (int16_t)roundf((float)raw_y * mouse_sensitivity);
+  *dx = x;
+  *dy = y;
+  int val = 0;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_LEFT)) val |= 0x01;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_RIGHT)) val |= 0x02;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_MIDDLE)) val |= 0x04;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_WHEELUP)) val |= 0x08;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_WHEELDOWN)) val |= 0x10;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_BUTTON_4)) val |= 0x20;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_BUTTON_5)) val |= 0x40;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELUP)) val |= 0x80;
+  if (input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_HORIZ_WHEELDOWN)) val |= 0x100;
+  *buttons = val;
+  return 0;
+}
+#include <stdarg.h>
+extern "C" void dbg_printf(const char *str, ...)
+{
+  static char ubuf[512];
+  va_list  arg_ptr;
+  va_start (arg_ptr, str);
+  vsprintf(ubuf, str, arg_ptr);
+  log_cb((retro_log_level)RETRO_LOG_INFO, ubuf);
 }
 
 void update_geometry(unsigned width, unsigned height)
