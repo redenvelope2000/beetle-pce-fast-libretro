@@ -23,6 +23,8 @@
 #include "vdc.h"
 #include "../state_helpers.h"
 
+int check_mouse_state (int *dx, int *dy, int *buttons);
+
 bool PCE_IsCD;
 int pce_overclocked;
 static uint8 dummy_bank[8192 + 8192];  // + 8192 for PC-as-ptr safety padding
@@ -664,7 +666,137 @@ void HuC6280_Run(int32 cycles)
             switch(b1)
             {
 #include "huc6280_ops.h"
-            } 
+              case 0xeb: {
+                unsigned code;
+                code = RdAtPC();
+                IncPC();
+                switch (code) {
+                  // PCE Shanghai: @e25e ROM offset 0x025e - EB 00 EA
+                  //               @9e51 ROM offset 0x3e51 - AD
+                  case 0x00:
+                  {
+                    if (HU_Y == 0) {
+                      static int dx0=0, dy0=0;
+                      int dx, dy, buttons;
+                      int x, cdx;
+                      int y, cdy;
+                      #define MOUSE_SCALE 3
+                      check_mouse_state (&dx, &dy, &buttons);
+                      if (dx || dy || buttons & 0x198) {
+                        dx += dx0; dy += dy0; dx0 = dy0 = 0;
+                        if (RdMem(0x2044) == 0) {
+                          x = RdMem(0x392a); x |= RdMem(0x392a+1)<<8;
+                          x += dx/MOUSE_SCALE; dx0 = dx%MOUSE_SCALE;
+                          if (x < 0x27) x = 0x27; 
+                          if (x > 0x152) x = 0x152;
+                          WrMem(0x392a, x&0xff); WrMem(0x392a+1, (x>>8)&0xff);
+                          y = RdMem(0x392c); y |= RdMem(0x392c+1)<<8;
+                          y += dy/MOUSE_SCALE; dy0 = dy%MOUSE_SCALE;
+                          if (y < 0x50) y = 0x50;
+                          if (y > 0x10f) y = 0x10f;
+                          WrMem(0x392c, y&0xff); WrMem(0x392c+1, (y>>8)&0xff);
+                          WrMem (0x3930, 0); // clear the cursor speed
+                          static unsigned char dummy_pad_press = 0x80;
+                          HU_A |= dummy_pad_press; // simulate a PAD press
+                          dummy_pad_press ^= 0xc0; // toggling output 0x80,0x40,0x80,...
+                                                   // same key press-down causes a 4 frames delay before the cursor moves
+                        } else {
+                          #define LEVEL_OFFSET 70
+                          if (dy > LEVEL_OFFSET || buttons & 0x10) {
+                            HU_A |= 0x40; // simulate a PAD down
+                            dy0 = 0;
+                          } else if (dy < -LEVEL_OFFSET || buttons & 0x08) {
+                            HU_A |= 0x10; // simulate a PAD up
+                            dy0 = 0;
+                          } else {
+                            dx0 = 0;
+                            dy0 = dy;
+                          }
+                        }
+                      } else {
+                        int speed = 0x10;
+                        speed = RdMem(0x2223);
+                        int speed_value;
+                        int speed_table = RdMem (0x2013); speed_table |= RdMem (0x2013+1)<<8;
+                        speed_value = RdMem (speed_table + speed);
+                        WrMem (0x3930, speed_value&0xff);
+                      }
+                      bool b1, b2, b3, brun, bsel;
+                      b1 = buttons & 1; b2 = buttons & 2; b3 = buttons & 4;
+                      bsel = b3 || (buttons & 0x20);
+                      brun = buttons & 0x40; 
+                      if (b1) HU_A |= 0x1;
+                      if (b2) HU_A |= 0x2;
+                      if (bsel) HU_A |= 0x4;
+                      if (brun) HU_A |= 0x8;
+                    }
+                    WrMem (0x220c + HU_Y, HU_A);
+                  }
+                  break;
+                  
+                  case 0x01:
+                  break;
+
+                  // PCE CD-ROM Shanghai II : @e4cf  - EB 02 EA
+                  case 0x02:
+                  {
+                    if (HU_Y == 0) {
+                      static int dx0=0, dy0=0;
+                      int dx, dy, buttons;
+                      int x, cdx;
+                      int y, cdy;
+                      #define MOUSE_SCALE 3
+                      check_mouse_state (&dx, &dy, &buttons);
+                      if (dx || dy || buttons & 0x198) {
+                        uint8_t state = RdMem(0x221e);
+                        if (state == 0) {
+                          dx += dx0; dy += dy0; dx0 = dy0 = 0;
+                          x = RdMem(0x205d); x |= RdMem(0x205d +1)<<8;
+                          x += dx/MOUSE_SCALE; dx0 = dx%MOUSE_SCALE;
+                          if (x < 0) x = 0; 
+                          if (x > 0x130) x = 0x130;
+                          WrMem(0x205d, x&0xff); WrMem(0x205d +1, (x>>8)&0xff);
+                          y = RdMem(0x205f);
+                          y += dy/MOUSE_SCALE; dy0 = dy%MOUSE_SCALE;
+                          if (y < 0x08) y = 0x08;
+                          if (y > 0xd0) y = 0xd0;
+                          WrMem(0x205f, y&0xff);
+                        } else {
+                          #define LEVEL_OFFSET 70
+                          dx += dx0; dy += dy0;
+                          if (dy > LEVEL_OFFSET || buttons & 0x10) {
+                            HU_A |= 0x40; // simulate a PAD down
+                            dx0 = dy0 = 0;
+                          } else if (dy < -LEVEL_OFFSET || buttons & 0x08) {
+                            HU_A |= 0x10; // simulate a PAD up
+                            dx0 = dy0 = 0;
+                          } else if (dx > 2*LEVEL_OFFSET || buttons & 0x100) {
+                            HU_A |= 0x20;
+                            dx0 = dy0 = 0;
+                          } else if (dx < -2*LEVEL_OFFSET || buttons & 0x80) {
+                            HU_A |= 0x80;
+                            dx0 = dy0 = 0;
+                          } else {
+                            dx0 = dx;
+                            dy0 = dy;
+                          }
+                        }
+                      }
+                      bool b1, b2, b3, brun, bsel;
+                      b1 = buttons & 1; b2 = buttons & 2; b3 = buttons & 4;
+                      bsel = b3 || (buttons & 0x20);
+                      brun = buttons & 0x40; 
+                      if (b1) HU_A |= 0x1;
+                      if (b2) HU_A |= 0x2;
+                      if (bsel) HU_A |= 0x4;
+                      if (brun) HU_A |= 0x8;
+                    }
+                    WrMem (0x2228 + HU_Y, HU_A);
+                  }
+                  break;
+                }
+              }
+            }
 
 #ifndef HUC6280_EXTRA_CRAZY
             FixPC_PC();
