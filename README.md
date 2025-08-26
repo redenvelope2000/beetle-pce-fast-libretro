@@ -1,4 +1,4 @@
-This is for adding mouse input to PCE Shanghai and PCE CDROM Shanghai II. The game code that accepts user inputs is trapped into the emulated CPU handler, mouse input states are translated into proper actions there.
+This is for adding mouse input to PC-Engine Shanghai and PC-Engine CDROM Shanghai II. The game code that accepts user inputs is trapped into the emulated CPU handler, mouse input states are translated into proper actions there.
 
 ## Changes from the original code
 
